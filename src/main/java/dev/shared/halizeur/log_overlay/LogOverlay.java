@@ -18,7 +18,6 @@ import eu.darkbot.api.extensions.Feature;
 import eu.darkbot.api.extensions.MapGraphics;
 import eu.darkbot.api.managers.EventBrokerAPI;
 import eu.darkbot.api.managers.GameLogAPI;
-import eu.darkbot.api.managers.I18nAPI;
 
 /**
  * Renders the latest in-game DarkOrbit log messages as an overlay on the
@@ -27,6 +26,11 @@ import eu.darkbot.api.managers.I18nAPI;
  * Source: {@link GameLogAPI.LogMessageEvent} emitted by DarkBot for each
  * new system message. Each line disappears after DISPLAY_MS ms so the
  * canvas does not get cluttered.
+ *
+ * Filter: only messages matching at least one keyword from the user's
+ * checked categories ({@link LogOverlayConfig.Categories}) are kept;
+ * keywords cover both FR and EN forms so the filter works regardless of
+ * the active game locale.
  */
 @Feature(name = "Log Overlay",
          description = "Shows the latest in-game log messages as an overlay on the canvas",
@@ -39,46 +43,57 @@ public class LogOverlay implements Behavior, Drawable, Listener, Configurable<Lo
     private static final int MAX_LINES = 5;
     private static final long DISPLAY_MS = 5000L;
 
-    /**
-     * Default whitelist (English) used when the active DarkBot locale has
-     * no {@code halizeur.log_overlay.whitelist} translation. Each comma-
-     * separated entry is a case-insensitive substring; a log message is
-     * displayed only if it contains at least one of them.
-     *
-     * Translators can override this per-locale by adding the same key in
-     * their {@code strings_<locale>.properties} file.
-     */
-    private static final String DEFAULT_WHITELIST =
-            "gained,received,reward,earned,"
-            + "uridium,credit,honor,honour,experience,xp,"
-            + "prometium,endurium,terbium,prometid,duranium,"
-            + "promerium,seprom,xenomit,palladium,drop,booster,"
-            + "error,failed,refused,denied,unavailable,full,"
-            + "cannot,impossible";
+    /** Keywords (FR + EN) for "loot / reward" log messages. */
+    private static final String[] KW_GAINS = {
+            // FR
+            "gagn", "obtenu", "récup", "recup", "récompense", "recompense",
+            "collect", "ramass",
+            // EN
+            "gained", "received", "reward", "earned"
+    };
+
+    /** Keywords for in-game currencies (uri, credits, honor, XP). */
+    private static final String[] KW_CURRENCIES = {
+            "uridium", "credit", "crédit",
+            "honor", "honour", "honneur",
+            "experience", "expérience", "xp "
+    };
+
+    /** Keywords for collectable / refinable resources. */
+    private static final String[] KW_RESOURCES = {
+            "prometium", "endurium", "terbium", "prometid", "duranium",
+            "promerium", "seprom", "xenomit", "palladium"
+    };
+
+    /** Keywords for booster / drop messages. */
+    private static final String[] KW_BOOSTERS = {
+            "drop", "booster"
+    };
+
+    /** Keywords (FR + EN) for error / refusal messages. */
+    private static final String[] KW_ERRORS = {
+            // FR
+            "impossible", "erreur", "échec", "echec",
+            "refusé", "refuse", "plein", "indisponible",
+            "non disponible", "interdit",
+            // EN
+            "error", "failed", "refused", "denied",
+            "unavailable", "full", "cannot", "can't"
+    };
+
+    /** Keywords (FR + EN) for combat / kill messages. */
+    private static final String[] KW_COMBAT = {
+            // FR
+            "tué", "tue", "détruit", "detruit", "dégât", "degat",
+            // EN
+            "kill", "destroyed", "boss", "damage"
+    };
 
     private final Deque<Entry> entries = new ArrayDeque<>();
-    private final List<String> whitelist;
     private LogOverlayConfig config;
 
     public LogOverlay(PluginAPI api) {
         api.requireAPI(EventBrokerAPI.class).registerListener(this);
-        I18nAPI i18n = api.requireAPI(I18nAPI.class);
-        this.whitelist = parseKeywords(i18n.getOrDefault(
-                "halizeur.log_overlay.whitelist", DEFAULT_WHITELIST));
-    }
-
-    /**
-     * Parses a comma-separated list of keywords, trimming whitespace and
-     * lower-casing each entry. Empty entries are dropped.
-     */
-    private static List<String> parseKeywords(String csv) {
-        List<String> out = new ArrayList<>();
-        if (csv == null) return out;
-        for (String s : csv.split(",")) {
-            String t = s.trim().toLowerCase();
-            if (!t.isEmpty()) out.add(t);
-        }
-        return out;
     }
 
     @Override
@@ -110,15 +125,25 @@ public class LogOverlay implements Behavior, Drawable, Listener, Configurable<Lo
     }
 
     /**
-     * Whitelist filter: only display the message if it contains at least
-     * one keyword from {@link #whitelist} (case-insensitive). The list
-     * comes from the i18n key {@code halizeur.log_overlay.whitelist} and
-     * thus adapts to the user's selected DarkBot locale.
+     * Whitelist filter: only display the message if at least one
+     * keyword from a checked category appears in it (case-insensitive).
      */
     private boolean isAllowed(String msg) {
         String lower = msg.toLowerCase();
-        for (String kw : whitelist) {
-            if (lower.contains(kw)) return true;
+        LogOverlayConfig.Categories c = this.config.categories;
+        if (c == null) return false;
+        if (c.gains      && containsAny(lower, KW_GAINS))      return true;
+        if (c.currencies && containsAny(lower, KW_CURRENCIES)) return true;
+        if (c.resources  && containsAny(lower, KW_RESOURCES))  return true;
+        if (c.boosters   && containsAny(lower, KW_BOOSTERS))   return true;
+        if (c.errors     && containsAny(lower, KW_ERRORS))     return true;
+        if (c.combat     && containsAny(lower, KW_COMBAT))     return true;
+        return false;
+    }
+
+    private static boolean containsAny(String haystack, String[] needles) {
+        for (String n : needles) {
+            if (haystack.contains(n)) return true;
         }
         return false;
     }
